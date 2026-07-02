@@ -71,6 +71,17 @@
   }
   .searchbox input::placeholder{ color: var(--muted-2); }
 
+  .typetabs{ display:flex; gap:8px; margin-bottom:10px; }
+  .typetab{
+    flex:1; text-align:center; padding: 9px 8px; border-radius: 10px;
+    background: var(--card); border:1px solid var(--line); color: var(--muted);
+    font-family:'Inter'; font-size: 13px; font-weight:600; cursor:pointer;
+    display:flex; align-items:center; justify-content:center; gap:6px;
+    transition: all 0.15s ease;
+  }
+  .typetab .ct{ font-family:'IBM Plex Mono', monospace; font-size:11px; opacity:0.7; }
+  .typetab.active{ background: rgba(210,163,57,0.14); border-color: var(--gold-dim); color: var(--gold); }
+
   .filters{ display:flex; gap:8px; overflow-x:auto; padding-bottom:4px; scrollbar-width:none; }
   .filters::-webkit-scrollbar{ display:none; }
   select{
@@ -110,6 +121,10 @@
     margin:0 0 2px; color: var(--ink);
     overflow:hidden; text-overflow:ellipsis; display:-webkit-box; -webkit-line-clamp:1; -webkit-box-orient:vertical;
   }
+  .proj .sno{
+    font-family:'IBM Plex Mono', monospace; font-size:11px; font-weight:500; color: var(--muted-2);
+    border:1px solid var(--line); border-radius:4px; padding:1px 5px; margin-right:6px; vertical-align:middle;
+  }
   .builder{ font-size: 12.5px; color: var(--muted); margin:0; }
   .loc{
     font-size: 12px; color: var(--gold); margin: 4px 0 0; font-family:'IBM Plex Mono', monospace;
@@ -136,7 +151,7 @@
   .b-neutral{ background: rgba(147,167,173,0.12); color: var(--muted); border:1px solid var(--line); }
   .b-caution{ background: rgba(184,86,63,0.16); color:#e3927d; border:1px solid rgba(184,86,63,0.4); }
 
-  .gauges{ display:flex; gap:14px; margin-top:2px; }
+  .gauges{ display:flex; flex-wrap:wrap; gap:10px 14px; margin-top:2px; }
   .gauge{ display:flex; align-items:center; gap:5px; }
   .gauge .dot{ width:7px; height:7px; border-radius:50%; flex:none; }
   .gauge span{ font-size: 10.5px; color: var(--muted-2); font-family:'IBM Plex Mono', monospace; }
@@ -197,15 +212,19 @@
         <input id="search" type="text" placeholder="Search project, builder, location…">
       </div>
     </div>
+    <div class="typetabs" id="typeTabs"></div>
     <div class="filters">
       <select id="fRec"></select>
       <select id="fLoc"></select>
-      <select id="fType"></select>
       <select id="fSort">
         <option value="sno">Sort: List order</option>
         <option value="price_asc">Price: Low to High</option>
         <option value="price_desc">Price: High to Low</option>
-        <option value="growth_desc">Growth potential</option>
+        <option value="growth_desc">Growth: High to Low</option>
+        <option value="flood_asc">Flood risk: Low to High</option>
+        <option value="commute_asc">Commute: Best to Worst</option>
+        <option value="rec_desc">Recommendation strength</option>
+        <option value="loc_asc">Location: A to Z</option>
       </select>
     </div>
   </header>
@@ -274,6 +293,36 @@ function badgeClass(rec){
   return 'b-neutral';
 }
 
+function commuteInfo(text){
+  const s = String(text||'');
+  const matches = [...s.matchAll(/(\d+)\s*(?:-\s*(\d+))?\s*\+?\s*min/gi)];
+  let nums = [];
+  matches.forEach(m=>{ nums.push(parseInt(m[1])); if(m[2]) nums.push(parseInt(m[2])); });
+  if(!nums.length) return { max:999, label:'Check details', cls:'g-mod' };
+  const max = Math.max(...nums);
+  if(max<=15) return { max, label:`Short (~${max}m)`, cls:'g-low' };
+  if(max<=30) return { max, label:`Moderate (~${max}m)`, cls:'g-mod' };
+  if(max<=45) return { max, label:`Long (~${max}m)`, cls:'g-modhigh' };
+  return { max, label:`Very long (~${max}m)`, cls:'g-high' };
+}
+function recRank(rec){
+  const s=(rec||'').toUpperCase();
+  if(s.includes('STRONGLY')) return 5;
+  if(s==='RECOMMENDED') return 4;
+  if(s.includes('DUE DILIGENCE')) return 3;
+  if(s.includes('NEUTRAL')) return 2;
+  if(s.includes('CAUTION')) return 1;
+  return 0;
+}
+function riskRank(v){
+  const s=(v||'').toLowerCase();
+  if(s.includes('moderate-high')) return 3;
+  if(s.includes('high')) return 4;
+  if(s.includes('moderate')) return 2;
+  if(s.includes('low')) return 1;
+  return 0;
+}
+
 const recs = [...new Set(DATA.map(d=>d['Recommendation']))].sort();
 const locs = [...new Set(DATA.map(d=>d['Location']))].sort();
 const types = [...new Set(DATA.map(d=>d['Type']))].sort();
@@ -282,8 +331,24 @@ const fRec = document.getElementById('fRec');
 fRec.innerHTML = '<option value="">All recommendations</option>' + recs.map(r=>`<option value="${r}">${r}</option>`).join('');
 const fLoc = document.getElementById('fLoc');
 fLoc.innerHTML = '<option value="">All locations</option>' + locs.map(r=>`<option value="${r}">${r}</option>`).join('');
-const fType = document.getElementById('fType');
-fType.innerHTML = '<option value="">All types</option>' + types.map(r=>`<option value="${r}">${r}</option>`).join('');
+
+let activeType = '';
+const typeTabs = document.getElementById('typeTabs');
+function buildTypeTabs(){
+  const tabs = [{v:'', label:'All'}, ...types.map(t=>({v:t, label:t}))];
+  typeTabs.innerHTML = tabs.map(t=>{
+    const count = t.v ? DATA.filter(d=>d['Type']===t.v).length : DATA.length;
+    return `<div class="typetab ${activeType===t.v?'active':''}" data-type="${t.v}">${t.label} <span class="ct">${count}</span></div>`;
+  }).join('');
+  typeTabs.querySelectorAll('.typetab').forEach(el=>{
+    el.addEventListener('click', ()=>{
+      activeType = el.dataset.type;
+      buildTypeTabs();
+      render();
+    });
+  });
+}
+buildTypeTabs();
 
 const list = document.getElementById('list');
 const search = document.getElementById('search');
@@ -297,7 +362,7 @@ function cardHTML(d, i){
     <div class="card-head" data-toggle>
       <div class="row-top">
         <div class="titles">
-          <p class="proj">${d['Project'] && d['Project']!=='-' ? d['Project'] : d['Type']+' — '+d['Location']}</p>
+          <p class="proj"><span class="sno">#${d['S.No']}</span> ${d['Project'] && d['Project']!=='-' ? d['Project'] : d['Type']+' — '+d['Location']}</p>
           <p class="builder">${d['Builder']}</p>
           <p class="loc">📍 ${d['Location']}</p>
         </div>
@@ -310,10 +375,12 @@ function cardHTML(d, i){
         <span class="badge ${badgeClass(d['Recommendation'])}">${d['Recommendation']}</span>
         <span class="pill">${d['Type']} · ${d['Size']}</span>
         <span class="pill">${d['Possession']}</span>
+        ${(d['Plot Price/sqft']!=='-' || d['Building Price/sqft']!=='-') ? `<span class="pill">Plot ${d['Plot Price/sqft']!=='-'?d['Plot Price/sqft']+'/sqft':'—'} · Build ${d['Building Price/sqft']!=='-'?d['Building Price/sqft']+'/sqft':'—'}</span>` : ''}
       </div>
       <div class="gauges">
         <div class="gauge"><span class="dot ${gaugeClass(d['Growth Potential'])}"></span><span>Growth: ${d['Growth Potential']}</span></div>
         <div class="gauge"><span class="dot ${gaugeClass(d['Waterlogging / Flood Risk'])}"></span><span>Flood: ${d['Waterlogging / Flood Risk']}</span></div>
+        <div class="gauge"><span class="dot ${commuteInfo(d['Commute Assessment']).cls}"></span><span>Commute: ${commuteInfo(d['Commute Assessment']).label}</span></div>
       </div>
     </div>
     <div class="detail">
@@ -322,6 +389,7 @@ function cardHTML(d, i){
         <div class="dsec">
           <h4>Snapshot</h4>
           <div class="kv">
+            <div class="item"><div class="k">Size</div><div class="v">${d['Size']}</div></div>
             <div class="item"><div class="k">UDS</div><div class="v">${d['UDS']}</div></div>
             <div class="item"><div class="k">SPOC</div><div class="v">${d['SPOC']}</div></div>
             <div class="item"><div class="k">Market rate</div><div class="v">${d['Current Market Rate (Area, Rs/sqft)']}</div></div>
@@ -329,6 +397,16 @@ function cardHTML(d, i){
             <div class="item"><div class="k">Final cash needed</div><div class="v">${d['Final Estimated Total Cost Needed (Rs.)']}</div></div>
             <div class="item"><div class="k">Rental assurance</div><div class="v">${d['Rental Assurance']}</div></div>
           </div>
+        </div>
+
+        <div class="dsec">
+          <h4>Plot &amp; building pricing</h4>
+          <div class="kv">
+            <div class="item"><div class="k">Plot rate</div><div class="v">${d['Plot Price/sqft']!=='-' ? d['Plot Price/sqft']+' /sqft' : 'Not quoted separately'}</div></div>
+            <div class="item"><div class="k">Building rate</div><div class="v">${d['Building Price/sqft']!=='-' ? d['Building Price/sqft']+' /sqft' : 'Not quoted separately'}</div></div>
+            <div class="item"><div class="k">Listing rate</div><div class="v">${d['Listing Rate (Rs/sqft)']}</div></div>
+          </div>
+          <p style="margin-top:8px;">${d['Price Basis / Calculation Notes']}</p>
         </div>
 
         <div class="dsec">
@@ -380,7 +458,7 @@ function cardHTML(d, i){
 
 function render(){
   const q = search.value.trim().toLowerCase();
-  const rec = fRec.value, loc = fLoc.value, type = fType.value, sort = fSort.value;
+  const rec = fRec.value, loc = fLoc.value, type = activeType, sort = fSort.value;
 
   let filtered = DATA.filter(d=>{
     if(rec && d['Recommendation']!==rec) return false;
@@ -397,6 +475,10 @@ function render(){
   if(sort==='price_asc') filtered.sort((a,b)=> (num(a.d['Estimated/Quoted Total Price'])||0) - (num(b.d['Estimated/Quoted Total Price'])||0));
   else if(sort==='price_desc') filtered.sort((a,b)=> (num(b.d['Estimated/Quoted Total Price'])||0) - (num(a.d['Estimated/Quoted Total Price'])||0));
   else if(sort==='growth_desc') filtered.sort((a,b)=> growthRank(b.d['Growth Potential']) - growthRank(a.d['Growth Potential']));
+  else if(sort==='flood_asc') filtered.sort((a,b)=> riskRank(a.d['Waterlogging / Flood Risk']) - riskRank(b.d['Waterlogging / Flood Risk']));
+  else if(sort==='commute_asc') filtered.sort((a,b)=> commuteInfo(a.d['Commute Assessment']).max - commuteInfo(b.d['Commute Assessment']).max);
+  else if(sort==='rec_desc') filtered.sort((a,b)=> recRank(b.d['Recommendation']) - recRank(a.d['Recommendation']));
+  else if(sort==='loc_asc') filtered.sort((a,b)=> String(a.d['Location']).localeCompare(String(b.d['Location'])));
 
   countLbl.textContent = `Showing ${filtered.length} of ${DATA.length}`;
   emptyMsg.style.display = filtered.length ? 'none':'block';
@@ -409,7 +491,7 @@ function render(){
   });
 }
 
-[search, fRec, fLoc, fType, fSort].forEach(el=> el.addEventListener('input', render));
+[search, fRec, fLoc, fSort].forEach(el=> el.addEventListener('input', render));
 render();
 </script>
 </body>
